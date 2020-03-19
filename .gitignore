@@ -27,6 +27,8 @@
 .nlia.cache
 .nra.cache
 csdp.cache
+report/
+*.pdf
 lia.cache
 nia.cache
 nlia.cache

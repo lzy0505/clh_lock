@@ -4,12 +4,12 @@ From iris.proofmode Require Import tactics.
 From iris.heap_lang Require Import proofmode notation.
 From iris.algebra Require Import gset gmap excl agree frac.
 From iris.heap_lang.lib Require Export lock.
-
 From iris.bi.lib Require Import fractional.
 
 Set Default Proof Using "Type".
 Import uPred.
 
+(** Implementation of CLH lock in Heaplang. *)
 Definition init_lock : val :=
   λ: "L",
      "L" <- ref #false. (* GRANTED, lock is free*)
@@ -54,7 +54,6 @@ Class lockedG Σ :=
 Definition lockedΣ : gFunctors :=
   #[ GFunctor (exclR ZO)].
 
-
 Instance subG_lockedΣ {Σ} : subG lockedΣ Σ → lockedG Σ.
 Proof. solve_inG. Qed.
 
@@ -69,97 +68,111 @@ Definition stateΣ : gFunctors :=
 Instance subG_stateΣ {Σ} : subG stateΣ Σ → stateG Σ.
 Proof. solve_inG. Qed.
 
-
 Section proof.
   Context `{!heapG Σ, !issuedG Σ, !lockedG Σ, !stateG Σ} (N : namespace).
 
 
+(* ISSUED is not duplicable. Only the thread that has ISSUED can spin on the corresponding node. It is allocated when init isProc.*)
 Definition ISSUED γ : iProp Σ := (own γ (Excl 0))%I.
 Lemma issued_exclusive (γ : gname) : ISSUED γ  -∗ ISSUED γ  -∗ False.
-  Proof.
-    iDestruct 1 as  "H1". iDestruct 1 as  "H2".
-    iDestruct (own_valid_2 with "H1 H2") as %[].
-  Qed.
+Proof.
+  iDestruct 1 as  "H1". iDestruct 1 as  "H2".
+  iDestruct (own_valid_2 with "H1 H2") as %[].
+Qed.
 
+(* LOCKED is not duplicable. Thread get it after acquairing the lock and give it back when releasing. It is allocated when init isLock*)
 Definition LOCKED γ : iProp Σ := (own γ (Excl 1))%I.
 Lemma locked_exclusive (γ : gname) : LOCKED γ -∗ LOCKED γ -∗ False.
-  Proof.
-    iDestruct 1 as  "H1". iDestruct 1 as  "H2".
-    iDestruct (own_valid_2 with "H1 H2") as %[].
-  Qed.
+Proof.
+  iDestruct 1 as  "H1". iDestruct 1 as  "H2".
+  iDestruct (own_valid_2 with "H1 H2") as %[].
+Qed.
 
+(* Abstract state. The value of b indicates the real value of the node. The definition is same as the one used for modular counter(with minor modification). *)
 Definition newstate (q:Qp) (b:bool):stateUR := (q, to_agree (b : leibnizO bool)).
 
- Notation "γ ⤇[ q ] b" := (own γ ( newstate q  b))
+Notation "γ ⤇[ q ] b" := (own γ ( newstate q  b))
                              (at level 20, q at level 50, format "γ ⤇[ q ] b") : bi_scope.
-  Notation "γ ⤇½ b" := (own γ (newstate (1/2) b))
+Notation "γ ⤇½ b" := (own γ (newstate (1/2) b))
                          (at level 20, format "γ ⤇½  b") : bi_scope.
 
 
- Global Instance makeElem_fractional γ m:  Fractional(λ q, γ ⤇[ q ] m)%I.
-  Proof.
-    intros p q. rewrite /newstate.
-    rewrite -own_op; f_equiv.
-    split; first done.
-      by rewrite /= agree_idemp.
-  Qed.
+Definition Locked γ1 γ3: iProp Σ := (LOCKED γ3 ∗ γ1 ⤇[1/2] false)%I.
 
-  Global Instance makeElem_as_fractional γ m q:
-    AsFractional (own γ (newstate q m)) (λ q, γ ⤇[q] m)%I q.
-  Proof.
-    split. done. apply _.
-  Qed.
+Global Instance makeElem_fractional γ m:  Fractional(λ q, γ ⤇[ q ] m)%I.
+Proof.
+  intros p q. rewrite /newstate.
+  rewrite -own_op; f_equiv.
+  split; first done.
+    by rewrite /= agree_idemp.
+Qed.
 
-  Global Instance makeElem_Exclusive m: Exclusive (newstate 1 m).
-  Proof.
-    intros [y ?] [H _]. apply (exclusive_l _ _ H). 
-  Qed.
+Global Instance makeElem_as_fractional γ m q:
+  AsFractional (own γ (newstate q m)) (λ q, γ ⤇[q] m)%I q.
+Proof.
+  split. done. apply _.
+Qed.
 
-  Lemma makeElem_op p q n:
-    newstate p n ⋅ newstate q n ≡ newstate (p + q) n.
-  Proof.
-    rewrite /newstate; split; first done. 
-      by rewrite /= agree_idemp.
-  Qed.
+Global Instance makeElem_Exclusive m: Exclusive (newstate 1 m).
+Proof.
+  intros [y ?] [H _]. apply (exclusive_l _ _ H).
+Qed.
 
-  Lemma makeElem_eq γ p q (n m : bool):
-    γ ⤇[p] n -∗ γ ⤇[q] m -∗ ⌜n = m⌝.
-  Proof.
-    iIntros "H1 H2".
-    iDestruct (own_valid_2 with "H1 H2") as %HValid.
-    destruct HValid as [_ H2].
-    iIntros "!%"; by apply agree_op_invL'.
-  Qed.
+Lemma makeElem_op p q n: newstate p n ⋅ newstate q n ≡ newstate (p + q) n.
+Proof.
+  rewrite /newstate; split; first done.
+    by rewrite /= agree_idemp.
+Qed.
 
-  Lemma makeElem_entail γ p q (n m : bool):
-    γ ⤇[p] n -∗ γ ⤇[q] m -∗ γ ⤇[p + q] n.
-  Proof.
-    iIntros "H1 H2".
-    iDestruct (makeElem_eq with "H1 H2") as %->.
-    iCombine "H1" "H2" as "H".
-      by rewrite makeElem_op.
-  Qed.
+Lemma makeElem_eq γ p q (n m : bool): γ ⤇[p] n -∗ γ ⤇[q] m -∗ ⌜n = m⌝.
+Proof.
+  iIntros "H1 H2".
+  iDestruct (own_valid_2 with "H1 H2") as %HValid.
+  destruct HValid as [_ H2].
+  iIntros "!%"; by apply agree_op_invL'.
+Qed.
 
-  Lemma makeElem_update γ (n m k : bool):
-    γ ⤇½ n -∗ γ ⤇½ m ==∗ γ ⤇[1] k.
-  Proof.
-    iIntros "H1 H2".
-    iDestruct (makeElem_entail with "H1 H2") as "H".
-    rewrite Qp_div_2.
-    iApply (own_update with "H"); by apply cmra_update_exclusive.
-  Qed.
+Lemma makeElem_entail γ p q (n m : bool): γ ⤇[p] n -∗ γ ⤇[q] m -∗ γ ⤇[p + q] n.
+Proof.
+  iIntros "H1 H2".
+  iDestruct (makeElem_eq with "H1 H2") as %->.
+  iCombine "H1" "H2" as "H".
+    by rewrite makeElem_op.
+Qed.
+
+Lemma makeElem_update γ (n m k : bool): γ ⤇½ n -∗ γ ⤇½ m ==∗ γ ⤇[1] k.
+Proof.
+  iIntros "H1 H2".
+  iDestruct (makeElem_entail with "H1 H2") as "H".
+  rewrite Qp_div_2.
+  iApply (own_update with "H"); by apply cmra_update_exclusive.
+Qed.
+
+Lemma dummy: (1/2 + 1/2 + 1/2 = 3/2)%Qp.
+Proof.
+  apply (bool_decide_unpack _).
+  by compute.
+Qed.
+
+Lemma invalidST γ:  γ⤇[3 / 2]false -∗ False.
+Proof.
+  iIntros "H".
+  iDestruct (own_valid with "H") as %[[] _].
+  eauto.
+Qed.
 
 
 
-  Definition nodeInv l γ1 γ2 γ3: iProp Σ:=
-    ∃ (m :bool), l ↦ #m ∗ γ1 ⤇[1/2] m ∗( ⌜m= true⌝
+(** Specifications for CLH lock *)
+Definition nodeInv l γ1 γ2 γ3: iProp Σ:=
+  ∃ (m :bool), l ↦ #m ∗ γ1 ⤇[1/2] m ∗( ⌜m= true⌝
                                 ∨ ⌜ m= false ⌝ ∗ ISSUED γ2
-                                ∨ ⌜ m= false ⌝ ∗ LOCKED γ3 ∗ γ1⤇[1/2] m).
+                                ∨ ⌜ m= false ⌝ ∗ Locked γ1 γ3 ).
 
 
 Definition isProc p (l1 l2 :loc) (n:bool) γ1 γ2 γ3 γ1' γ2' : iProp Σ:=
   ∃(req watch :loc)  , ⌜p = (#req, #watch)%V ⌝ ∗ req ↦ #l1 ∗ watch ↦ #l2  ∗ γ1 ⤇[1/2] n ∗ inv (N.@ "node") (nodeInv l1 γ1 γ2 γ3) ∗
-      (⌜n= false ⌝  ∨ ⌜n=true⌝ ∗ γ1'⤇[1/2] false  ∗ inv (N.@"node") (nodeInv l2 γ1' γ2' γ3) ).
+      (⌜n= false ⌝  ∨ ⌜n=true⌝  ∗ inv (N.@"node") (nodeInv l2 γ1' γ2' γ3) ).
 
 Definition lockInv l γ3: iProp Σ:=
   ∃(k:loc) γ1 γ2, l ↦ #k ∗ ISSUED γ2  ∗ inv (N.@ "node") (nodeInv k γ1 γ2 γ3).
@@ -167,7 +180,7 @@ Definition lockInv l γ3: iProp Σ:=
 Definition isLock l γ3 : iProp Σ:=
    inv (N .@ "lock") (lockInv l γ3 ).
 
-Lemma init_spec l :
+Lemma init_lock_spec l :
   {{{∃ n, l ↦ n}}}init_lock #l {{{RET #(); ∃ γ3, isLock l γ3 }}}.
 Proof.
   iIntros (ϕ) "Hpt Hcont".
@@ -194,7 +207,9 @@ Proof.
 Qed.
 
 Lemma init_proc_spec (p:val) γ3 :
-  {{{∃ (req watch j k:loc), ⌜p = (#req,#watch)%V ⌝ ∗ req ↦ #j ∗ watch ↦ #k }}}init_proc p {{{RET #(); ∃ l1 l2 γ1 γ2 γ1' γ2', isProc p l1 l2 false γ1 γ2 γ3 γ1' γ2'}}}.
+  {{{∃ (req watch j k:loc), ⌜p = (#req,#watch)%V ⌝ ∗ req ↦ #j ∗ watch ↦ #k }}}
+    init_proc p
+    {{{RET #(); ∃ l1 l2 γ1 γ2 γ1' γ2', isProc p l1 l2 false γ1 γ2 γ3 γ1' γ2'}}}.
 Proof.
   iIntros (ϕ) "Hp Hcont".
   rewrite -wp_fupd.
@@ -216,11 +231,10 @@ Proof.
   eauto with iFrame.
 Qed.
 
-
-
 Lemma spin_spec (k:loc) γ1 γ2 γ3 :
-  {{{ inv (N.@"node") (nodeInv k γ1 γ2 γ3) ∗ ISSUED γ2}}} spin #k
-                                                      {{{RET #(); inv (N.@"node") (nodeInv k γ1 γ2 γ3) ∗  LOCKED γ3 ∗ γ1 ⤇[1/2] false}}}.
+  {{{ inv (N.@"node") (nodeInv k γ1 γ2 γ3) ∗ ISSUED γ2}}}
+    spin #k
+    {{{RET #(); inv (N.@"node") (nodeInv k γ1 γ2 γ3) ∗  Locked γ1 γ3}}}.
 Proof.
   iIntros (ϕ) "[#Hnode HIS] Hcont".
   iLöb as "IH".
@@ -247,9 +261,11 @@ Proof.
       eauto with iFrame.
 Qed.
 
-
+(* Fetch-and-store operation(atomic) *)
 Lemma FAS_spec l l1 γ1 γ2 γ3:
-  {{{isLock l γ3 ∗ ISSUED γ2 ∗ inv (N.@"node") (nodeInv l1 γ1 γ2 γ3) }}}FAS #l #l1{{{k, RET #k; ∃ γ1' γ2', ISSUED γ2' ∗ inv (N.@"node") (nodeInv k γ1' γ2' γ3)}}}.
+  {{{isLock l γ3 ∗ ISSUED γ2 ∗ inv (N.@"node") (nodeInv l1 γ1 γ2 γ3) }}}
+    FAS #l #l1
+    {{{k, RET #k; ∃ γ1' γ2', ISSUED γ2' ∗ inv (N.@"node") (nodeInv k γ1' γ2' γ3)}}}.
 Proof.
   iIntros (ϕ) "[#Hlkinv [Hl1IS #Hnodeinv]] Hcont".
   iLöb as "IH".
@@ -264,8 +280,7 @@ Proof.
   iModIntro.
   wp_let.
   wp_bind (CmpXchg _ _ _)%E.
-  iInv (N .@ "lock") as (k' γ1'' γ2'') "(>Hlpt & Hk'IS & #Hk'node
-)" "Hclose".
+  iInv (N .@ "lock") as (k' γ1'' γ2'') "(>Hlpt & Hk'IS & #Hk'node)" "Hclose".
   destruct (decide (k = k')) as [->|Hneq].
   + (* FAS succ case*)
     wp_cmpxchg_suc.
@@ -283,21 +298,10 @@ Proof.
     iApply ("IH" with "Hl1IS Hcont").
 Qed.
 
-Lemma dummy: (1/2 + 1/2 + 1/2 = 3/2)%Qp.
-Proof.
-  apply (bool_decide_unpack _).
-  by compute.
-Qed.
-
-Lemma invalidST γ:  γ⤇[3 / 2]false -∗ False.
-Proof.
-  iIntros "H".
-  iDestruct (own_valid with "H") as %[[] _].
-  eauto.
-Qed.
-
 Lemma request_spec l p (l1 l2:loc) γ1 γ2 γ3 γ1' γ2':
-  {{{isProc p l1 l2 false γ1 γ2 γ3 γ1' γ2'∗ isLock l γ3}}}request #l p {{{RET #(); ∃ k γ1'' γ2'', isProc p l1 k true γ1 γ2 γ3 γ1'' γ2'' ∗ LOCKED γ3}}}.
+  {{{isProc p l1 l2 false γ1 γ2 γ3 γ1' γ2'∗ isLock l γ3}}}
+    request #l p
+    {{{RET #(); ∃ k γ1'' γ2'', isProc p l1 k true γ1 γ2 γ3 γ1'' γ2'' ∗ Locked γ1'' γ3}}}.
 Proof.
    iIntros (ϕ) "(Hpc & #Hlkinv) Hcont".
    iDestruct "Hpc" as (req watch) "(-> & Hreq & Hwatch & HST1 & #Hpcinv & [Hdisj1| Hdisj2] )".
@@ -334,7 +338,9 @@ Proof.
           iApply "Hcont".
           iFrame.
           rewrite /isProc.
-          iExists  k', γ1'', γ2'', req, watch.
+          iExists  k', γ1'', γ2''.
+          iFrame.
+          iExists req, watch.
           iFrame "#".
           eauto with iFrame.
      + iDestruct (makeElem_entail with "HST1 HST2") as "HSTT".
@@ -346,9 +352,11 @@ Proof.
 Qed.
 
 Lemma grant_spec p l1 l2 γ1 γ2 γ3 γ1' γ2':
-  {{{isProc p l1 l2 true γ1 γ2 γ3 γ1' γ2' ∗ LOCKED γ3 }}}grant p{{{RET #(); isProc p l2 l2 false γ1' γ2' γ3 γ1' γ2'}}}.
+  {{{isProc p l1 l2 true γ1 γ2 γ3 γ1' γ2' ∗ Locked γ1' γ3 }}}
+    grant p
+    {{{RET #(); isProc p l2 l2 false γ1' γ2' γ3 γ1' γ2'}}}.
 Proof.
-  iIntros (ϕ) "(Hpc & HL) Hcont".
+  iIntros (ϕ) "(Hpc & [HL HST]) Hcont".
   iDestruct "Hpc" as (req watch) "(-> & Hreq & Hwatch & HST1 & #Hpcinv & [%| Hdisj2] )".
   - discriminate H.
   - wp_lam;wp_proj;wp_load.
@@ -365,7 +373,7 @@ Proof.
         wp_store.
         iApply ("Hcont").
         iExists req, watch.
-        iDestruct "Hdisj2" as "(_ & HST1 & #Hl2node)".
+        iDestruct "Hdisj2" as "(_ & #Hl2node)".
         eauto with iFrame.
       * discriminate H.
     + destruct b.
@@ -374,6 +382,3 @@ Proof.
         discriminate H'.
     + iDestruct (locked_exclusive with "HL HLL") as%[].
 Qed.
-
-
-
