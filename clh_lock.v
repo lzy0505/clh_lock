@@ -11,12 +11,19 @@ Import uPred.
 
 (** Implementation of CLH lock in Heaplang. *)
 Definition init_lock : val :=
-  λ: "L",
-     "L" <- ref #false. (* GRANTED, lock is free*)
+  λ: "" ,
+     let: "L" := ref #0 in
+     "L" <- ref #false;;
+     "L". (* GRANTED, lock is free*)
 
 Definition init_proc :val :=
- λ: "P",
-     (Fst "P") <- ref #false.
+  λ: "",
+  let: "t" := ref #0 in
+  let: "R" := ref "t" in
+  let: "W" := ref "t" in
+  let: "P" := ("R","W") in
+  (Fst "P") <- ref #false;;
+  "P".
 
 Definition grant : val :=
   λ:  "P", !(Fst "P") <- #false;;
@@ -69,8 +76,8 @@ Instance subG_stateΣ {Σ} : subG stateΣ Σ → stateG Σ.
 Proof. solve_inG. Qed.
 
 Section proof.
-  Context `{!heapG Σ, !issuedG Σ, !lockedG Σ, !stateG Σ} (N : namespace).
 
+  Context `{!heapG Σ, !issuedG Σ, !lockedG Σ, !stateG Σ} (N : namespace).
 
 (* ISSUED is not duplicable. Only the thread that has ISSUED can spin on the corresponding node. It is allocated when init isProc.*)
 Definition ISSUED γ : iProp Σ := (own γ (Excl 0))%I.
@@ -162,32 +169,33 @@ Proof.
 Qed.
 
 
-
 (** Specifications for CLH lock *)
-Definition nodeInv l γ1 γ2 γ3: iProp Σ:=
+Definition nodeInv l R γ1 γ2 γ3: iProp Σ:=
   ∃ (m :bool), l ↦ #m ∗ γ1 ⤇[1/2] m ∗( ⌜m= true⌝
                                 ∨ ⌜ m= false ⌝ ∗ ISSUED γ2
-                                ∨ ⌜ m= false ⌝ ∗ Locked γ1 γ3 ).
+                                ∨ ⌜ m= false ⌝ ∗ Locked γ1 γ3 ∗ R ).
 
 
-Definition isProc p (l1 l2 :loc) (n:bool) γ1 γ2 γ3 γ1' γ2' : iProp Σ:=
-  ∃(req watch :loc)  , ⌜p = (#req, #watch)%V ⌝ ∗ req ↦ #l1 ∗ watch ↦ #l2  ∗ γ1 ⤇[1/2] n ∗ inv (N.@ "node") (nodeInv l1 γ1 γ2 γ3) ∗
-      (⌜n= false ⌝  ∨ ⌜n=true⌝  ∗ inv (N.@"node") (nodeInv l2 γ1' γ2' γ3) ).
+Definition isProc p (n:bool) R γ1 γ2 γ3 γ1' γ2' : iProp Σ:=
+  ∃(req watch l1 l2 :loc)  , ⌜p = (#req, #watch)%V ⌝ ∗ req ↦ #l1 ∗ watch ↦ #l2  ∗ γ1 ⤇[1/2] n ∗ inv (N.@ "node") (nodeInv l1 R γ1 γ2 γ3) ∗
+      (⌜n= false ⌝  ∨ ⌜n=true⌝  ∗ inv (N.@"node") (nodeInv l2 R γ1' γ2' γ3) ).
 
-Definition lockInv l γ3: iProp Σ:=
-  ∃(k:loc) γ1 γ2, l ↦ #k ∗ ISSUED γ2  ∗ inv (N.@ "node") (nodeInv k γ1 γ2 γ3).
+Definition lockInv l R γ3: iProp Σ:=
+  ∃(k:loc) γ1 γ2, l ↦ #k ∗ ISSUED γ2  ∗ inv (N.@ "node") (nodeInv k R γ1 γ2 γ3).
 
-Definition isLock l γ3 : iProp Σ:=
-   inv (N .@ "lock") (lockInv l γ3 ).
+Definition isLock l R γ3 : iProp Σ:=
+   inv (N .@ "lock") (lockInv l R γ3 ).
 
-Lemma init_lock_spec l :
-  {{{∃ n, l ↦ n}}}init_lock #l {{{RET #(); ∃ γ3, isLock l γ3 }}}.
+Lemma init_lock_spec (R: iProp Σ) :
+  {{{R}}}init_lock #() {{{l, RET #l; ∃ γ3, isLock l R γ3 }}}.
 Proof.
-  iIntros (ϕ) "Hpt Hcont".
+  iIntros (ϕ) "HR Hcont".
   rewrite -wp_fupd.
   wp_lam.
+  wp_alloc l as "Hlpt".
+  wp_pures.
   wp_alloc k as "Hkpt".
-  iDestruct "Hpt" as (t) "Hlpt".
+(**  iDestruct "Hpt" as (t) "Hlpt". *)
   wp_store.
   iMod (own_alloc (Excl 1)) as (γ3) "HL".
   {done. }
@@ -195,52 +203,57 @@ Proof.
   {done. }
   iMod (own_alloc (newstate 1 false)) as (γ1) "[HST1 HST2]".
   {done. }
-  iMod (inv_alloc (N .@ "node") _ (nodeInv k γ1 γ2 γ3 ) with "[-Hcont Hlpt HIS]") as "Hinv".
+  iMod (inv_alloc (N .@ "node") _ (nodeInv k R γ1 γ2 γ3 ) with "[-Hcont Hlpt HIS]") as "Hinv".
   {iNext. iExists false.  eauto with iFrame. }
   iApply "Hcont".
   rewrite /isLock.
   iExists γ3.
-  iMod (inv_alloc (N .@ "lock") _ (lockInv l γ3) with "[Hlpt Hinv HIS]").
+  iMod (inv_alloc (N .@ "lock") _ (lockInv l R γ3) with "[Hlpt Hinv HIS]").
   {iNext. iExists k,γ1, γ2. iFrame. }
   iModIntro.
   iFrame.
 Qed.
 
-Lemma init_proc_spec (p:val) γ3 :
-  {{{∃ (req watch j k:loc), ⌜p = (#req,#watch)%V ⌝ ∗ req ↦ #j ∗ watch ↦ #k }}}
-    init_proc p
-    {{{RET #(); ∃ l1 l2 γ1 γ2 γ1' γ2', isProc p l1 l2 false γ1 γ2 γ3 γ1' γ2'}}}.
+Lemma init_proc_spec R γ3 :
+  {{{True }}}
+    init_proc #()
+    {{{p, RET p; ∃ γ1 γ2 γ1' γ2', isProc p false R γ1 γ2 γ3 γ1' γ2'}}}.
 Proof.
-  iIntros (ϕ) "Hp Hcont".
+  iIntros (ϕ) "_ Hcont".
   rewrite -wp_fupd.
-  iDestruct "Hp" as (req watch j k) "[-> [Hreq Hwatch]]".
   wp_lam.
+  wp_alloc k.
+  wp_alloc req as "Hreq".
+  wp_let.
+  wp_alloc watch as "Hwatch".
+  wp_let.
+  wp_pures.
   wp_alloc l1 as "Hl1pt".
   wp_proj;wp_store.
   iMod (own_alloc (Excl 0)) as (γ2) "HIS".
   {done. }
   iMod (own_alloc (newstate 1 false)) as (γ1) "[HST1 HST2]".
   {done. }
-  iMod (inv_alloc (N .@ "node") _ (nodeInv l1 γ1 γ2 γ3) with "[-Hcont HST1 Hreq Hwatch]") as "Hinv".
+  iMod (inv_alloc (N .@ "node") _ (nodeInv l1 R γ1 γ2 γ3) with "[-Hcont HST1 Hreq Hwatch]") as "Hinv".
   {iNext. iExists false.  eauto with iFrame. }
   iApply "Hcont".
-  iExists l1, k, γ1, γ2, γ3, γ1.
+  iExists γ1, γ2, γ3, γ1.
   iModIntro.
   iFrame.
-  iExists req, watch.
+  iExists req, watch, l1, k.
   eauto with iFrame.
 Qed.
 
-Lemma spin_spec (k:loc) γ1 γ2 γ3 :
-  {{{ inv (N.@"node") (nodeInv k γ1 γ2 γ3) ∗ ISSUED γ2}}}
+Lemma spin_spec (k:loc) R γ1 γ2 γ3 :
+  {{{ inv (N.@"node") (nodeInv k R γ1 γ2 γ3) ∗ ISSUED γ2}}}
     spin #k
-    {{{RET #(); inv (N.@"node") (nodeInv k γ1 γ2 γ3) ∗  Locked γ1 γ3}}}.
+    {{{RET #(); inv (N.@"node") (nodeInv k R γ1 γ2 γ3) ∗  Locked γ1 γ3∗ R}}}.
 Proof.
   iIntros (ϕ) "[#Hnode HIS] Hcont".
   iLöb as "IH".
   wp_lam.
   wp_bind (! _)%E.
-  iInv (N .@ "node") as (b) ">(Hkpt & HST1 & [% |[[% HISS] | [% [HL HST2]]]])" "Hclose".
+  iInv (N .@ "node") as (b) "(>Hkpt & >HST1 & [>% |[[>% >HISS] | [>% [>HL HR]]]])" "Hclose".
   - destruct b.
     * wp_load. (* false case *)
       iMod ("Hclose" with "[Hkpt HST1]") as "_".
@@ -262,10 +275,10 @@ Proof.
 Qed.
 
 (* Fetch-and-store operation(atomic) *)
-Lemma FAS_spec l l1 γ1 γ2 γ3:
-  {{{isLock l γ3 ∗ ISSUED γ2 ∗ inv (N.@"node") (nodeInv l1 γ1 γ2 γ3) }}}
+Lemma FAS_spec l l1 R γ1 γ2 γ3:
+  {{{isLock l R γ3 ∗ ISSUED γ2 ∗ inv (N.@"node") (nodeInv l1 R γ1 γ2 γ3) }}}
     FAS #l #l1
-    {{{k, RET #k; ∃ γ1' γ2', ISSUED γ2' ∗ inv (N.@"node") (nodeInv k γ1' γ2' γ3)}}}.
+    {{{k, RET #k; ∃ γ1' γ2', ISSUED γ2' ∗ inv (N.@"node") (nodeInv k R γ1' γ2' γ3)}}}.
 Proof.
   iIntros (ϕ) "[#Hlkinv [Hl1IS #Hnodeinv]] Hcont".
   iLöb as "IH".
@@ -298,18 +311,18 @@ Proof.
     iApply ("IH" with "Hl1IS Hcont").
 Qed.
 
-Lemma request_spec l p (l1 l2:loc) γ1 γ2 γ3 γ1' γ2':
-  {{{isProc p l1 l2 false γ1 γ2 γ3 γ1' γ2'∗ isLock l γ3}}}
+Lemma request_spec l p R γ1 γ2 γ3 γ1' γ2':
+  {{{isProc p false R γ1 γ2 γ3 γ1' γ2'∗ isLock l R γ3}}}
     request #l p
-    {{{RET #(); ∃ k γ1'' γ2'', isProc p l1 k true γ1 γ2 γ3 γ1'' γ2'' ∗ Locked γ1'' γ3}}}.
+    {{{RET #(); ∃ γ1'' γ2'', isProc p true R γ1 γ2 γ3 γ1'' γ2'' ∗ Locked γ1'' γ3 ∗ R}}}.
 Proof.
    iIntros (ϕ) "(Hpc & #Hlkinv) Hcont".
-   iDestruct "Hpc" as (req watch) "(-> & Hreq & Hwatch & HST1 & #Hpcinv & [Hdisj1| Hdisj2] )".
+   iDestruct "Hpc" as (req watch l1 l2) "(-> & Hreq & Hwatch & HST1 & #Hpcinv & [Hdisj1| Hdisj2] )".
    - rewrite /isLock.
      rewrite /lockInv.
      wp_lam; wp_let;wp_proj;wp_load.
      wp_bind (_ <- _)%E.
-     iInv (N .@ "node") as (b) ">(Hl1pt & HST2 & [% |[[% HIS] | [% [HL HST3]]]])" "Hclose".
+     iInv (N .@ "node") as (b) "(>Hl1pt & >HST2 & [>% |[[>% >HIS] | [>% [>[HL HST3] HR]]]])" "Hclose".
      + destruct b.
        * iDestruct (makeElem_eq with "HST1 HST2") as %H'.
          discriminate H'.
@@ -325,22 +338,22 @@ Proof.
           wp_seq;wp_proj;wp_load.
           wp_bind (FAS _ _)%E.
           (*FAS*)
-          iApply (FAS_spec l l1 γ1 γ2 γ3  with "[Hlkinv HIS Hpcinv]").
+          iApply (FAS_spec l l1 R γ1 γ2 γ3  with "[Hlkinv HIS Hpcinv]").
           {iFrame. rewrite /isLock. iFrame "#". }
           iNext.
           iIntros (k') "HPostFAS".
           iDestruct "HPostFAS" as (γ1'' γ2'') "[Hk'IS #Hk'node]".
           (* Spin *)
           wp_proj;wp_store;wp_proj;wp_load.
-          iApply (spin_spec k' γ1'' γ2'' γ3 with "[Hk'node Hk'IS]").
+          iApply (spin_spec k' R γ1'' γ2'' γ3 with "[Hk'node Hk'IS]").
           { iFrame. iFrame "#". }
           iNext. iIntros "[_ [HL HSTk']]".
           iApply "Hcont".
           iFrame.
           rewrite /isProc.
-          iExists  k', γ1'', γ2''.
+          iExists γ1'', γ2''.
           iFrame.
-          iExists req, watch.
+          iExists req, watch, l1, k'.
           iFrame "#".
           eauto with iFrame.
      + iDestruct (makeElem_entail with "HST1 HST2") as "HSTT".
@@ -351,28 +364,28 @@ Proof.
      discriminate H.
 Qed.
 
-Lemma grant_spec p l1 l2 γ1 γ2 γ3 γ1' γ2':
-  {{{isProc p l1 l2 true γ1 γ2 γ3 γ1' γ2' ∗ Locked γ1' γ3 }}}
+Lemma grant_spec p R γ1 γ2 γ3 γ1' γ2':
+  {{{isProc p true R γ1 γ2 γ3 γ1' γ2' ∗ Locked γ1' γ3 ∗ R}}}
     grant p
-    {{{RET #(); isProc p l2 l2 false γ1' γ2' γ3 γ1' γ2'}}}.
+    {{{RET #(); isProc p false R γ1' γ2' γ3 γ1' γ2'}}}.
 Proof.
-  iIntros (ϕ) "(Hpc & [HL HST]) Hcont".
-  iDestruct "Hpc" as (req watch) "(-> & Hreq & Hwatch & HST1 & #Hpcinv & [%| Hdisj2] )".
+  iIntros (ϕ) "(Hpc & [[HL HST] HR]) Hcont".
+  iDestruct "Hpc" as (req watch l1 l2) "(-> & Hreq & Hwatch & HST1 & #Hpcinv & [%| Hdisj2] )".
   - discriminate H.
   - wp_lam;wp_proj;wp_load.
     wp_bind (_ <- _)%E.
-    iInv (N .@ "node") as (b) ">(Hl1pt & HST2 & [% |[[% HIS] | [% [HLL HST3]]]])" "Hclose".
+    iInv (N .@ "node") as (b) "(>Hl1pt & >HST2 & [>% |[[>% >HIS] | [>% [[>HLL >HST3] _]]]])" "Hclose".
     + destruct b.
       * wp_store.
         iMod (makeElem_update _ _ _ false with "HST1 HST2") as "[HST1 HST2]".
-        iMod("Hclose" with "[Hl1pt HST1 HST2 HL]") as "_".
+        iMod("Hclose" with "[Hl1pt HST1 HST2 HL HR]") as "_".
         { iNext. iExists false. eauto with iFrame. }
         iModIntro.
         wp_seq.
         wp_proj;wp_load;wp_proj.
         wp_store.
         iApply ("Hcont").
-        iExists req, watch.
+        iExists req, watch, l2, l2.
         iDestruct "Hdisj2" as "(_ & #Hl2node)".
         eauto with iFrame.
       * discriminate H.
@@ -382,3 +395,8 @@ Proof.
         discriminate H'.
     + iDestruct (locked_exclusive with "HL HLL") as%[].
 Qed.
+
+End proof.
+
+
+
