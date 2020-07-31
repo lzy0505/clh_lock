@@ -49,17 +49,17 @@ Definition request : val :=
 
 (** The CMRAs we need. *)
 Class issuedG Σ :=
-  issue_G :> inG Σ (exclR ZO).
+  issue_G :> inG Σ (exclR unitO).
 Definition issuedΣ : gFunctors :=
-  #[ GFunctor (exclR ZO)].
+  #[ GFunctor (exclR unitO)].
 
 Instance subG_issuedΣ {Σ} : subG issuedΣ Σ → issuedG Σ.
 Proof. solve_inG. Qed.
 
 Class lockedG Σ :=
-  locked_G :> inG Σ (exclR ZO).
+  locked_G :> inG Σ (exclR unitO).
 Definition lockedΣ : gFunctors :=
-  #[ GFunctor (exclR ZO)].
+  #[ GFunctor (exclR unitO)].
 
 Instance subG_lockedΣ {Σ} : subG lockedΣ Σ → lockedG Σ.
 Proof. solve_inG. Qed.
@@ -80,7 +80,7 @@ Section proof.
   Context `{!heapG Σ, !issuedG Σ, !lockedG Σ, !stateG Σ} (N : namespace).
 
 (* ISSUED is not duplicable. Only the thread that has ISSUED can spin on the corresponding node. It is allocated when init isProc.*)
-Definition ISSUED γ : iProp Σ := (own γ (Excl 0))%I.
+Definition ISSUED γ : iProp Σ := (own γ (Excl ()))%I.
 Lemma issued_exclusive (γ : gname) : ISSUED γ  -∗ ISSUED γ  -∗ False.
 Proof.
   iDestruct 1 as  "H1". iDestruct 1 as  "H2".
@@ -88,7 +88,7 @@ Proof.
 Qed.
 
 (* LOCKED is not duplicable. Thread get it after acquairing the lock and give it back when releasing. It is allocated when init isLock*)
-Definition LOCKED γ : iProp Σ := (own γ (Excl 1))%I.
+Definition LOCKED γ : iProp Σ := (own γ (Excl ()))%I.
 Lemma locked_exclusive (γ : gname) : LOCKED γ -∗ LOCKED γ -∗ False.
 Proof.
   iDestruct 1 as  "H1". iDestruct 1 as  "H2".
@@ -143,8 +143,8 @@ Lemma makeElem_entail γ p q (n m : bool): γ ⤇[p] n -∗ γ ⤇[q] m -∗ γ 
 Proof.
   iIntros "H1 H2".
   iDestruct (makeElem_eq with "H1 H2") as %->.
-  iCombine "H1" "H2" as "H".
-    by rewrite makeElem_op.
+  rewrite <- makeElem_op.
+  iSplitL "H1";done.
 Qed.
 
 Lemma makeElem_update γ (n m k : bool): γ ⤇½ n -∗ γ ⤇½ m ==∗ γ ⤇[1] k.
@@ -197,9 +197,9 @@ Proof.
   wp_alloc k as "Hkpt".
 (**  iDestruct "Hpt" as (t) "Hlpt". *)
   wp_store.
-  iMod (own_alloc (Excl 1)) as (γ3) "HL".
+  iMod (own_alloc (Excl ())) as (γ3) "HL".
   {done. }
-  iMod (own_alloc (Excl 0)) as (γ2) "HIS".
+  iMod (own_alloc (Excl ())) as (γ2) "HIS".
   {done. }
   iMod (own_alloc (newstate 1 false)) as (γ1) "[HST1 HST2]".
   {done. }
@@ -230,7 +230,7 @@ Proof.
   wp_pures.
   wp_alloc l1 as "Hl1pt".
   wp_proj;wp_store.
-  iMod (own_alloc (Excl 0)) as (γ2) "HIS".
+  iMod (own_alloc (Excl ())) as (γ2) "HIS".
   {done. }
   iMod (own_alloc (newstate 1 false)) as (γ1) "[HST1 HST2]".
   {done. }
